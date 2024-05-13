@@ -2,13 +2,19 @@
 
 use Crawler\Crawler;
 
-function memory_get_usage_converted() {
-    $size = memory_get_usage();
-    $unit=array('b','kb','mb','gb','tb','pb');
-    return @round($size/pow(1024,($i=floor(log($size,1024)))),2).' '.$unit[$i];
-}
-
-require 'classes/autoload.php';
+require 'classes/Crawler.model.php';
 
 $crawler = new Crawler();
-$crawler->start('https://www.php.net/');
+
+$crawler->set_opt(Crawler::OPT_DISPLAY_CRAWLS, true);
+$crawler->set_opt(Crawler::OPT_DISPLAY_MEMORY_INFO, true);
+
+$crawler->add_event('link_found', function($link) {
+    echo "link: {$link}\n";
+});
+
+$crawler->add_event('finish', function($elapsed_time){
+    echo "Finished in {$elapsed_time}s\n";
+});
+
+$crawler->start('https://www.nacionaleng.com.br');
