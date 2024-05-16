@@ -15,7 +15,7 @@ class Url {
 
         $this->Url = $url;
         $this->Host = $url_info['host'] ?? '';
-        $this->Scheme = $url_info['scheme'] ?? 'https';
+        $this->Scheme = $url_info['scheme'] ?? '';
 
         $page = $url_info['path'] ?? '';
         if(substr($page, strlen($page) - 1) == '/'){
@@ -27,6 +27,25 @@ class Url {
         }
 
         $this->Page = $page;
+    }
+
+    public function buildUrl(string $page = '') : string {
+
+        if(!$page){
+            $page = $this->Page;
+        }
+
+        $scheme = $this->Scheme;
+        if(!$scheme){
+            $scheme = 'https';
+        }
+
+        $host = $this->Host;
+        if(!$host){
+            return '';
+        }
+        
+        return "{$scheme}://{$host}{$page}";
     }
 
     public function __get(string $attr){

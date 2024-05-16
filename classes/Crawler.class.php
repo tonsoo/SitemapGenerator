@@ -6,20 +6,20 @@ require 'Url.class.php';
 
 class Crawler {
 
-    public const OPT_DISPLAY_MEMORY_INFO = 100;
-    public const OPT_DISPLAY_CRAWLS = 101;
-    public const OPT_RESPECT_NOINDEX = 102;
-    public const OPT_RESPECT_NOFOLLOW = 103;
-    public const OPT_RESPECT_CANONICAL = 104;
+    public const OPT_DISPLAY_MEMORY_INFO = 100; // Determines if memory usage should be displayed in each crawl
+    public const OPT_DISPLAY_CRAWLS = 101; // Determines if the url crawled should be displayed in the console
+    public const OPT_RESPECT_NOINDEX = 102; // Determines if the program should search for the "noindex" inside the "robots" or will it simply ignore it
+    public const OPT_RESPECT_NOFOLLOW = 103; // Determines if the program should search for the "nofollow" inside the "robots" or will it simply ignore it
+    public const OPT_RESPECT_CANONICAL = 104; // Determines if the program should search for the canonical url of the page crawled
     public const OPT_SAME_SCHEME_TO_END = 105;
     public const OPT_SAME_SUB_DOMAIN_TO_END = 106;
 
-    public const EVENT_ON_CRAWL = 201;
-    public const EVENT_ON_LINK_FOUND = 202;
-    public const EVENT_ON_NEW_LINK_FOUND = 203;
-    public const EVENT_ON_FINISH = 204;
-    public const EVENT_ON_MISSING_HTML = 205;
-    public const EVENT_ON_MISMATCH_CONTENT = 206;
+    public const EVENT_ON_CRAWL = 201; // Event that is called in each url crawl
+    public const EVENT_ON_LINK_FOUND = 202; // Event called whenever a link is found
+    public const EVENT_ON_NEW_LINK_FOUND = 203; // Event called whenever a NEW link is found
+    public const EVENT_ON_FINISH = 204; // Event called after the crawled has reached the end
+    public const EVENT_ON_MISSING_HTML = 205; // Event called whenever a url does not respond with html content
+    public const EVENT_ON_MISMATCH_CONTENT = 206; // Event called whenever a url response is not "text/html"
 
     private array $Pages;
     private \DomDocument $DOM;
@@ -86,12 +86,12 @@ class Crawler {
         }
     }
 
-    public function set_opt(int $option, mixed $value) : void{
+    public function set_opt(int $option, mixed $value) : void {
 
         $this->Options[$option] = $value;
     }
 
-    public function get_opt(int $option) : mixed{
+    public function get_opt(int $option) : mixed {
 
         if(!isset($this->Options[$option])){
             return false;
@@ -139,6 +139,8 @@ class Crawler {
             return;
         }
         
+        $this->trigger_event(self::EVENT_ON_NEW_LINK_FOUND, $url_info);
+
         array_splice($this->Pages, $insert_index, 0, [ $url_info->Page ]);
 
         $display_memory = (bool)$this->get_opt(self::OPT_DISPLAY_MEMORY_INFO);
@@ -160,7 +162,7 @@ class Crawler {
         unset($display_crawls);
 
         $page_info = [];
-        $this->get_url_content($url, $page_info);
+        $this->get_url_remote_information($url, $page_info);
 
         if(!$page_info['html']){
             $this->trigger_event(self::EVENT_ON_MISSING_HTML, $url_info, $page_info);
@@ -174,12 +176,14 @@ class Crawler {
         }
 
         $this->DOM->loadHTML($page_info['html']);
-        unset($page_info);
+        unset($page_info['html']);
 
         $robots = $this->get_robots();
         $canonical = $this->get_canonical_url($url);
 
-        $this->trigger_event(self::EVENT_ON_CRAWL, $url_info, $robots, $canonical);
+        $this->trigger_event(self::EVENT_ON_CRAWL, $url_info, $robots, $canonical, $page_info);
+
+        unset($page_info);
 
         if(!$robots['follow']){
             return;
@@ -194,7 +198,11 @@ class Crawler {
         foreach($page_links as $page_index => &$check_page){
             $this->trigger_event(self::EVENT_ON_LINK_FOUND, $url_info, $check_page);
 
-            $this->crawl_page("{$url_info->Scheme}://{$url_info->Host}{$check_page}");
+            $crawl_url = $url_info->buildUrl($check_page);
+            if($crawl_url){
+                $this->crawl_page($crawl_url);
+                unset($crawl_url);
+            }
 
             unset($page_links[$page_index]);
         }
@@ -203,6 +211,10 @@ class Crawler {
     }
 
     private function get_canonical_url(string &$url) : string {
+
+        if(!$this->get_opt(self::OPT_RESPECT_CANONICAL)){
+            return $url;
+        }
 
         $links = $this->DOM->getElementsByTagName('link');
         foreach($links as $link){
@@ -256,7 +268,7 @@ class Crawler {
 
     private function get_links(Url $url_info, array &$output) : void {
 
-        if(!$url_info->Host){
+        if(!$url_info->Host || !$url_info->Scheme){
             return;
         }
 
@@ -265,25 +277,35 @@ class Crawler {
         $links = $this->DOM->getElementsByTagName('a');
         foreach($links as $link){
             $link_address = $link->getAttribute('href');
-            $link_address = strtolower($link_address);
 
             $link_info = $this->get_info_from_url($link_address);
 
-            if($link_info->Host && $link_info->Host != $url_info->Host){
+            // echo "{$link_info->Scheme} | {$link_info->Host} | {$link_info->Page}\n";
+
+            if(!empty($link_info->Host) && $link_info->Host != $url_info->Host){
                 continue;
             }
 
-            if($link_info->Scheme && $link_info->Scheme != $url_info->Scheme){
+            if(!empty($link_info->Scheme) && $link_info->Scheme != $url_info->Scheme){
                 continue;
             }
 
-            if(!in_array($link_info->Page, $output)){
+            $page_to_add = $link_info->Page;
+            if(substr($link_info->Page, 0, 1) != '/'){
+                $current_page = explode('/', $url_info->Page);
+                $current_page = array_slice($current_page, 0, count($current_page) - 1);
+                $current_page = implode('/', $current_page);
+
+                $page_to_add = "{$current_page}/{$page_to_add}";
+            }
+
+            if(!in_array($page_to_add, $output)){
                 $output[] = $link_info->Page;
             }
         }
     }
 
-    private function get_url_content(string $url, array &$output) : void {
+    private function get_url_remote_information(string $url, array &$output) : void {
 
         curl_setopt($this->Curl, CURLOPT_URL, $url);
 
