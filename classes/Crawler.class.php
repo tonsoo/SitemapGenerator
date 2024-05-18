@@ -11,8 +11,8 @@ class Crawler {
     public const OPT_RESPECT_NOINDEX = 102; // Determines if the program should search for the "noindex" inside the "robots" or will it simply ignore it
     public const OPT_RESPECT_NOFOLLOW = 103; // Determines if the program should search for the "nofollow" inside the "robots" or will it simply ignore it
     public const OPT_RESPECT_CANONICAL = 104; // Determines if the program should search for the canonical url of the page crawled
-    public const OPT_SAME_SCHEME_TO_END = 105;
-    public const OPT_SAME_SUB_DOMAIN_TO_END = 106;
+    public const OPT_PRESERVE_SCHEME = 105; // Determines if the scheme used to connect will be preserved, connections started with "https" will remain "https" until the end of execution
+    public const OPT_PERSERVE_HOST = 106; // Determines if the host used to connect will be preserved, connections on the host "example.com" will only connect to other pages inside the host "example.com"
 
     public const EVENT_ON_CRAWL = 201; // Event that is called in each url crawl
     public const EVENT_ON_LINK_FOUND = 202; // Event called whenever a link is found
@@ -46,8 +46,8 @@ class Crawler {
         $this->set_opt(self::OPT_RESPECT_NOFOLLOW, true);
         $this->set_opt(self::OPT_RESPECT_CANONICAL, true);
 
-        $this->set_opt(self::OPT_SAME_SCHEME_TO_END, true);
-        $this->set_opt(self::OPT_SAME_SUB_DOMAIN_TO_END, true);
+        $this->set_opt(self::OPT_PRESERVE_SCHEME, true);
+        $this->set_opt(self::OPT_PERSERVE_HOST, true);
 
         curl_setopt($this->Curl, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($this->Curl, CURLOPT_FOLLOWLOCATION, true);
@@ -133,15 +133,20 @@ class Crawler {
     private function crawl_page(string $url) : void {
 
         $url_info = $this->get_info_from_url($url);
+        $built_url = $url_info->buildUrl();
 
-        $insert_index = $this->search_page($url_info->Page);
-        if(($this->Pages[$insert_index] ?? '') == $url_info->Page){
+        // $insert_index = $this->search_page($built_url);
+        // if(($this->Pages[$insert_index] ?? '') == $built_url){
+        //     return;
+        // }
+        $insert_index = array_search($built_url, $this->Pages);
+        if(false !== $insert_index){
             return;
         }
         
         $this->trigger_event(self::EVENT_ON_NEW_LINK_FOUND, $url_info);
 
-        array_splice($this->Pages, $insert_index, 0, [ $url_info->Page ]);
+        array_splice($this->Pages, $insert_index, 0, [ $built_url ]);
 
         $display_memory = (bool)$this->get_opt(self::OPT_DISPLAY_MEMORY_INFO);
         $display_crawls = (bool)$this->get_opt(self::OPT_DISPLAY_CRAWLS);
@@ -150,7 +155,7 @@ class Crawler {
             $pages_crawled = count($this->Pages);
     
             $display_text = $display_memory ? "Memory usage: {$this->get_memory_usage()}; " : '';
-            $display_text = $display_crawls ? "{$display_text}Pages crawled: {$pages_crawled} -> Current crawl: {$url}\n" : "{$display_text}\n";
+            $display_text = $display_crawls ? "{$display_text}Pages crawled: {$pages_crawled} -> Current crawl: {$built_url}\n" : "{$display_text}\n";
 
             echo $display_text;
 
@@ -198,7 +203,7 @@ class Crawler {
         foreach($page_links as $page_index => &$check_page){
             $this->trigger_event(self::EVENT_ON_LINK_FOUND, $url_info, $check_page);
 
-            $crawl_url = $url_info->buildUrl($check_page);
+            $crawl_url = $check_page->buildUrl();
             if($crawl_url){
                 $this->crawl_page($crawl_url);
                 unset($crawl_url);
@@ -272,6 +277,9 @@ class Crawler {
             return;
         }
 
+        $preserve_scheme = (bool)$this->get_opt(self::OPT_PRESERVE_SCHEME);
+        $preserve_host = (bool)$this->get_opt(self::OPT_PERSERVE_HOST);
+
         $output = [];
 
         $links = $this->DOM->getElementsByTagName('a');
@@ -280,13 +288,11 @@ class Crawler {
 
             $link_info = $this->get_info_from_url($link_address);
 
-            // echo "{$link_info->Scheme} | {$link_info->Host} | {$link_info->Page}\n";
-
-            if(!empty($link_info->Host) && $link_info->Host != $url_info->Host){
+            if($preserve_host && $link_info->Host != $url_info->Host){
                 continue;
             }
 
-            if(!empty($link_info->Scheme) && $link_info->Scheme != $url_info->Scheme){
+            if($preserve_scheme && $link_info->Scheme != $url_info->Scheme){
                 continue;
             }
 
@@ -299,8 +305,10 @@ class Crawler {
                 $page_to_add = "{$current_page}/{$page_to_add}";
             }
 
-            if(!in_array($page_to_add, $output)){
-                $output[] = $link_info->Page;
+            $url_to_add = $preserve_host ? $url_info->buildUrl($page_to_add) : $link_info->buildUrl($page_to_add);
+
+            if(!in_array($url_to_add, $output)){
+                $output[] = $link_info;
             }
         }
     }
@@ -314,6 +322,7 @@ class Crawler {
             'status' => curl_getinfo($this->Curl, CURLINFO_HTTP_CODE),
             'content-type' => curl_getinfo($this->Curl, CURLINFO_CONTENT_TYPE),
             'redirect-url' => curl_getinfo($this->Curl, CURLINFO_REDIRECT_URL),
+            'response-time' => curl_getinfo($this->Curl, CURLINFO_TOTAL_TIME),
         ];
     }
 

@@ -6,8 +6,7 @@ require 'classes/Crawler.class.php';
 
 // $crawl_url = 'https://www.urbs.curitiba.pr.gov.br';
 // $crawl_url = 'https://gamejolt.com';
-// $crawl_url = 'https://github.com';
-$crawl_url = 'https://www.facebook.com';
+$crawl_url = 'https://github.com'; // Has over 200.000 pages
 $crawl_host = parse_url($crawl_url)['host'] ?? 'unknown-host';
 
 $start = date('Y-m-d.H-i-s');
@@ -23,6 +22,8 @@ fwrite($sitemap_file, "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0
 
 $crawler = new Crawler();
 
+$crawler->set_opt(Crawler::OPT_PERSERVE_HOST, true);
+
 $crawler->set_opt(Crawler::OPT_DISPLAY_CRAWLS, true);
 $crawler->set_opt(Crawler::OPT_DISPLAY_MEMORY_INFO, true);
 $crawler->set_opt(Crawler::OPT_RESPECT_CANONICAL, false);
@@ -31,15 +32,15 @@ $crawler->set_opt(Crawler::OPT_RESPECT_NOFOLLOW, true);
 
 $crawler->add_event(Crawler::EVENT_ON_CRAWL, function($url_info, $robots, $canonical, $page_info) use ($sitemap_file, $links_file) {
 
-    $url = $url_info->Url;
+    $url = $url_info->buildUrl();
 
-    $skip_url = !$robots['index'] || $canonical != $url_info->Url || $page_info['status'] != 200;
+    $skip_url = !$robots['index'] || ($canonical != $url_info->Url && $canonical != $url) || $page_info['status'] != 200;
 
     $skip_write = $skip_url ? 'skipped' : 'written';
 
     $index_write = $robots['index'] ? 'index' : 'noindex';
     $follow_write = $robots['follow'] ? 'follow' : 'nofollow';
-    fwrite($links_file, "({$page_info['status']} - {$skip_write}) {$page_info['content-type']} [{$index_write}, {$follow_write}] {$url} -> {$canonical}\n");
+    fwrite($links_file, "({$page_info['status']} - {$skip_write}) {$page_info['content-type']} [{$index_write}, {$follow_write}] {$page_info['response-time']}ms {$url} -> {$canonical}\n");
 
     if($skip_url){
         return;
