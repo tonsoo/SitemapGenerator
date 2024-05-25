@@ -2,7 +2,7 @@
 
 use Crawler\Crawler;
 
-ini_set('memory_limit', 0);
+ini_set('memory_limit', -1);
 
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -11,7 +11,7 @@ require './classes/Crawler.class.php';
 
 // $crawl_url = 'https://www.urbs.curitiba.pr.gov.br';
 // $crawl_url = 'https://gamejolt.com';
-// $crawl_url = 'https://github.com'; // Has over 200.000 pages
+$crawl_url = 'https://github.com'; // Has over 200.000 pages
 $crawl_host = parse_url($crawl_url)['host'] ?? 'unknown-host';
 
 $start = date('Y-m-d.H-i-s');
@@ -44,7 +44,7 @@ $links_file = fopen("{$sitemap_folder}/links.txt", 'w');
 
 $pages_indexed = 0;
 
-$crawler = new Crawler();
+$crawler = new Crawler(1000);
 
 $crawler->set_opt(Crawler::OPT_PERSERVE_HOST, true);
 
@@ -58,13 +58,13 @@ $crawler->add_event(Crawler::EVENT_ON_CRAWL, function($url_info, $robots, $canon
 
     $url = $url_info->buildUrl();
 
-    $skip_url = !$robots['index'] || ($canonical != $url_info->Url && $canonical != $url) || $page_info['status'] != 200;
+    $skip_url = !$robots['index'] || ($canonical != $url_info->Url && $canonical != $url) || $page_info['http_code'] != 200;
 
     $skip_write = $skip_url ? 'skipped' : 'written';
 
     $index_write = $robots['index'] ? 'index' : 'noindex';
     $follow_write = $robots['follow'] ? 'follow' : 'nofollow';
-    fwrite($links_file, "({$page_info['status']} - {$skip_write}) {$page_info['content-type']} [{$index_write}, {$follow_write}] {$page_info['response-time']}ms {$url} -> {$canonical}\n");
+    fwrite($links_file, "({$page_info['http_code']} - {$skip_write}) {$page_info['content_type']} [{$index_write}, {$follow_write}] {$page_info['total_time']}ms {$url} -> {$canonical}\n");
 
     if($skip_url){
         return;
@@ -87,7 +87,7 @@ $crawler->add_event(Crawler::EVENT_ON_FINISH, function($elapsed_time) use ($site
 });
 
 $crawler->add_event(Crawler::EVENT_ON_MISMATCH_CONTENT, function($url_info, $info) {
-    echo "{$url_info->Url} -> {$info['content-type']}\n";
+    echo "{$url_info->Url} -> {$info['content_type']}\n";
 });
 
 $crawler->start($crawl_url);

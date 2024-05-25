@@ -54,22 +54,85 @@ class Crawler {
         $this->set_opt(self::OPT_PRESERVE_SCHEME, true);
         $this->set_opt(self::OPT_PERSERVE_HOST, true);
 
-        $this->CurlHandles = [];
-
         if($max_async_curls < 1){
             $max_async_curls = 1;
         }
 
         $this->MaxCurls = $max_async_curls;
+    }
 
-        $max_timeout = 4 * $this->MaxCurls;
-        for($i = 0; $i < $this->MaxCurls; $i++){
-            $this->CurlHandles[$i] = [
-                'curl' => curl_init(),
-                'active' => false,
-                'url' => ''
-            ];
+    // protected function set_curl(string $url, &$handle) : void {
 
+    //     if(is_resource($handle)){
+    //         curl_setopt($handle, CURLOPT_URL, $url);
+    //         return;
+    //     }
+
+    //     $handle = curl_init();
+
+    //     curl_setopt($handle, CURLOPT_URL, $url);
+        
+    //     curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
+    //     curl_setopt($handle, CURLOPT_FOLLOWLOCATION, true);
+    //     curl_setopt($handle, CURLOPT_FRESH_CONNECT, true);
+    //     curl_setopt($handle, CURLOPT_VERBOSE, false);
+    //     curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, false);
+    //     curl_setopt($handle, CURLOPT_CONNECTTIMEOUT, 4);
+    //     curl_setopt($handle, CURLOPT_TIMEOUT, 4);
+    //     curl_setopt($handle, CURLOPT_MAXREDIRS, 10);
+    //     curl_setopt($handle, CURLOPT_USERAGENT, 'Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/81.0');
+
+    //     curl_multi_add_handle($this->Curl, $handle);
+    // }
+
+    protected function init_curl(string ...$urls) : void {
+
+        $handles_len = count($this->CurlHandles);
+        $urls_len = count($urls);
+        $diff = $this->MaxCurls - $urls_len;
+        if($diff > 0){
+            for($i = 0; $i < $diff && $i < $handles_len; $i++){
+                if(is_resource($this->CurlHandles[$i]['curl'])){
+                    curl_multi_remove_handle($this->Curl, $this->CurlHandles[$i]['curl']);
+                }
+            }
+        } else if($diff < 0){
+            $diff *= -1;
+            for($i = 0; $i < $diff && $i < $urls_len; $i++){
+                $url = $urls[$i];
+
+                $url_info = $this->get_info_from_url($url);
+                $this->add_page_to_queue($url_info);
+
+                unset($urls[$i]);
+            }
+
+            $urls = array_values($urls);
+        }
+
+        $urls_len = count($urls);
+
+        $max_timeout = 4 * $urls_len;
+        for($i = 0; $i < $this->MaxCurls && $i < $urls_len; $i++){
+            $handle_url = $urls[$i];
+
+            if(!isset($this->CurlHandles[$i]['curl'])){
+                $this->CurlHandles[$i] = [
+                    'curl' => 'wtf',
+                ];
+            }
+
+            $this->CurlHandles[$i]['url'] = $handle_url;
+
+            if(is_resource($this->CurlHandles[$i]['curl'])){
+                curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_URL, $url);
+                continue;
+            }
+    
+            $this->CurlHandles[$i]['curl'] = curl_init();
+    
+            curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_URL, $handle_url);
+            
             curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_RETURNTRANSFER, true);
             curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_FOLLOWLOCATION, true);
             curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_FRESH_CONNECT, true);
@@ -79,25 +142,8 @@ class Crawler {
             curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_TIMEOUT, $max_timeout);
             curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_MAXREDIRS, 10);
             curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_USERAGENT, 'Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/81.0');
-        }
-    }
-
-    protected function init_curl(string ...$urls) : void {
-
-        foreach($this->CurlHandles as $k => &$handle){
-            $url = $urls[$k] ?? '';
-
-            $handle_active = (bool)$url;
-            curl_setopt($handle['curl'], CURLOPT_URL, $url);
-
-            if($url && !$handle['active']){
-                curl_multi_add_handle($this->Curl, $handle['curl']);
-            } else if($handle['active']){
-                curl_multi_remove_handle($this->Curl, $handle['curl']);
-            }
-
-            $handle['active'] = $handle_active;
-            $handle['url'] = $url;
+    
+            curl_multi_add_handle($this->Curl, $this->CurlHandles[$i]['curl']);
         }
     }
 
@@ -148,7 +194,8 @@ class Crawler {
 
         $start = time();
 
-        $this->PagesQueued = [$url];
+        $url_info = $this->get_info_from_url($url);
+        $this->add_page_to_queue($url_info);
 
         do{
             $this->crawl_page(...$this->PagesQueued);
@@ -181,19 +228,39 @@ class Crawler {
         unset($display_crawls);
     }
 
-    protected function validate_url(Url $url_info) : bool {
-        $built_url = $url_info->buildUrl();
+    protected function remove_page_from_queue(string $built_url) : void {
 
         $queue_index = array_search($built_url, $this->PagesQueued);
-        if(!$queue_index !== false){
+        if($queue_index !== false){
             unset($this->PagesQueued[$queue_index]);
             $this->PagesQueued = array_values($this->PagesQueued);
         }
+    }
+
+    protected function add_page_to_queue(Url $url) : void {
+        
+        $built_url = $url->buildUrl();
+        $in_queue = in_array($built_url, $this->PagesQueued);
+        $in_pages = in_array($built_url, $this->Pages);
+
+        if($in_queue && $in_pages){
+            $this->remove_page_from_queue($built_url);
+            return;
+        }
+
+        if(!$in_queue && !$in_pages){
+            $this->PagesQueued[] = $built_url;
+        }
+    }
+
+    protected function is_url_valid(Url $url_info) : bool {
+        $built_url = $url_info->buildUrl();
 
         if(in_array($built_url, $this->Pages)){
             return false;
         }
         
+        $this->Pages[] = $built_url;
         $this->trigger_event(self::EVENT_ON_NEW_LINK_FOUND, $url_info);
 
         return true;
@@ -201,22 +268,31 @@ class Crawler {
 
     protected function crawl_page(string ...$urls) : void {
 
-        $urls_count = count($urls);
-        $diff = $this->MaxCurls - $urls_count;
+        $urls_len = count($urls);
+        $diff = $this->MaxCurls - $urls_len;
         $pages_queued_count = count($this->PagesQueued);
-        if($diff > 0 && $pages_queued_count > 0){
-            for($i = 0; $i < $diff && $i < $pages_queued_count; $i++){
+        if($diff > 0){
+            for($i = 0; $i < $diff && $i < $pages_queued_count && $i < $this->MaxCurls; $i++){
                 $urls[] = $this->PagesQueued[$i];
+                unset($this->PagesQueued[$i]);
             }
 
-            echo "\tqueued: {$pages_queued_count}; i: {$i}\n";
-            $this->PagesQueued = array_slice($this->PagesQueued, $i);
+            $this->PagesQueued = array_values($this->PagesQueued);
+        } else if($diff < 0){
+            $diff *= -1;
+            for($i = 0; $i < $diff && $i < $urls_len && $i < $this->MaxCurls; $i++){
+                $url_info = $this->get_info_from_url($urls[$i]);
+                $this->add_page_to_queue($url_info);
+                unset($urls[$i]);
+            }
+
+            $urls = array_values($urls);
         }
 
         $valid_urls = [];
-        foreach($urls as &$url_to_validade){
+        foreach($urls as $url_to_validade){
             $__info = $this->get_info_from_url($url_to_validade);
-            if(!$this->validate_url($__info)){
+            if(!$this->is_url_valid($__info)){
                 continue;
             }
 
@@ -227,73 +303,16 @@ class Crawler {
             return;
         }
 
-        $multi_page_info = [];
-        $this->get_url_remote_information($multi_page_info, ...$valid_urls);
+        $this->get_url_remote_information(...$valid_urls);
 
+        $queue_len = count($this->PagesQueued);
         $next_urls = [];
-        foreach($multi_page_info as $page_info){
-            $url_info = $this->get_info_from_url($page_info['url']);
-
-            $built_url = $url_info->buildUrl();
-
-            $this->Pages[] = $built_url;
-
-            $this->debug_info($built_url);
-
-            if(!$page_info['html']){
-                unset($page_info['html']);
-                $this->trigger_event(self::EVENT_ON_MISSING_HTML, $url_info, $page_info);
-                continue;
-            }
-    
-            if(!preg_match('/text\/html/i', $page_info['content-type'])){
-                unset($page_info['html']);
-                $this->trigger_event(self::EVENT_ON_MISMATCH_CONTENT, $url_info, $page_info);
-                continue;
-            }
-    
-            @$this->DOM->loadHTML($page_info['html']);
-            unset($page_info['html']);
-    
-            $robots = $this->get_robots();
-            $canonical = $this->get_canonical_url($page_info['url']);
-    
-            $this->trigger_event(self::EVENT_ON_CRAWL, $url_info, $robots, $canonical, $page_info);
-    
-            unset($page_info);
-    
-            if(!$robots['follow']){
-                continue;
-            }
-    
-            unset($robots);
-            unset($canonical);
-    
-            $page_links = [];
-            $this->get_links($url_info, $page_links);
-    
-            foreach($page_links as &$check_page){
-                $this->trigger_event(self::EVENT_ON_LINK_FOUND, $url_info, $check_page);
-    
-                $crawl_url = $check_page->buildUrl();
-                if(!$crawl_url){
-                    continue;
-                }
-
-                if(count($next_urls) < $this->MaxCurls){
-                    if(!in_array($crawl_url, $next_urls)){
-                        $next_urls[] = $crawl_url;
-                    }
-
-                    continue;
-                }
-
-                if(!in_array($crawl_url, $this->PagesQueued)){
-                    $this->PagesQueued[] = $crawl_url;
-                }
-            }
+        for($i = 0; $i < $this->MaxCurls && $i < $queue_len; $i++){
+            $next_urls[] = $this->PagesQueued[$i];
+            unset($this->PagesQueued[$i]);
         }
-
+        $this->PagesQueued = array_values($this->PagesQueued);
+        
         $this->crawl_page(...$next_urls);
     }
 
@@ -395,40 +414,67 @@ class Crawler {
         }
     }
 
-    protected function get_url_remote_information(array &$output, string ...$urls) : void {
-
-        $output = [];
+    protected function get_url_remote_information(string ...$urls) : void {
 
         $this->init_curl(...$urls);
 
         $active = null;
         do{
             curl_multi_exec($this->Curl, $active);
-            curl_multi_select($this->Curl);
-        } while($active > 0);
-
-        foreach($this->CurlHandles as $k => $handle){
-            if(!$handle['active']){
-                continue;
+            if($this->Curl != CURLM_CALL_MULTI_PERFORM){
+                curl_multi_select($this->Curl);
             }
+        } while($active === null || $active > 0 || $this->Curl == CURLM_CALL_MULTI_PERFORM);
+
+        for($i = 0; $i < count($this->CurlHandles); $i++){
+            $handle = &$this->CurlHandles[$i];
+
+            $url_info = $this->get_info_from_url($handle['url']);
+            $built_url = $url_info->buildUrl();
+
+            $this->debug_info($built_url);
 
             $content = curl_multi_getcontent($handle['curl']);
             $info = curl_getinfo($handle['curl']);
 
+            if(!$content){
+                unset($content);
+                $this->trigger_event(self::EVENT_ON_MISSING_HTML, $url_info, $info);
+                continue;
+            }
+    
+            if(!preg_match('/text\/html/i', $info['content_type'])){
+                unset($content);
+                $this->trigger_event(self::EVENT_ON_MISMATCH_CONTENT, $url_info, $info);
+                continue;
+            }
 
-            $output[] = [
-                'url' => $handle['url'],
-                // 'html' => curl_multi_getcontent($handle['curl']),
-                // 'status' => curl_getinfo($handle['curl'], CURLINFO_HTTP_CODE),
-                // 'content-type' => curl_getinfo($handle['curl'], CURLINFO_CONTENT_TYPE),
-                // 'redirect-url' => curl_getinfo($handle['curl'], CURLINFO_REDIRECT_URL),
-                // 'response-time' => curl_getinfo($handle['curl'], CURLINFO_TOTAL_TIME),
-                'html' => $content,
-                'status' => $info['http_code'],
-                'content-type' => $info['content_type'],
-                'redirect-url' => $info['redirect_url'],
-                'response-time' => $info['total_time'],
-            ];
+            @$this->DOM->loadHTML($content, LIBXML_COMPACT | LIBXML_BIGLINES | LIBXML_NOERROR | LIBXML_PARSEHUGE | LIBXML_NSCLEAN | LIBXML_NOBLANKS);
+            unset($content);
+    
+            $robots = $this->get_robots();
+            $canonical = $this->get_canonical_url($handle['url']);
+
+            $info['canonical-url'] = $canonical;
+            $info['robots'] = $robots;
+
+            $this->trigger_event(self::EVENT_ON_CRAWL, $url_info, $robots, $canonical, $info);
+
+            $page_links = [];
+            if($robots['follow']){
+                $this->get_links($url_info, $page_links);
+
+                foreach($page_links as $link_info){
+                    $this->trigger_event(self::EVENT_ON_LINK_FOUND, $url_info, $link_info);
+        
+                    $built_url = $link_info->buildUrl();
+                    if(!$built_url){
+                        continue;
+                    }
+    
+                    $this->add_page_to_queue($link_info);
+                }
+            }
         }
     }
 
