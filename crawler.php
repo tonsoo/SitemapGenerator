@@ -44,7 +44,7 @@ $links_file = fopen("{$sitemap_folder}/links.txt", 'w');
 
 $pages_indexed = 0;
 
-$crawler = new Crawler(1000);
+$crawler = new Crawler(100);
 
 $crawler->set_opt(Crawler::OPT_PERSERVE_HOST, true);
 

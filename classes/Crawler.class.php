@@ -1,6 +1,7 @@
 <?php
 
 namespace Crawler;
+use CurlHandle;
 
 require 'Url.class.php';
 
@@ -20,6 +21,7 @@ class Crawler {
     public const EVENT_ON_FINISH = 204; // Event called after the crawled has reached the end
     public const EVENT_ON_MISSING_HTML = 205; // Event called whenever a url does not respond with html content
     public const EVENT_ON_MISMATCH_CONTENT = 206; // Event called whenever a url response is not "text/html"
+    public const EVENT_ON_DEBUG = 207; // Event called whenever a url response is not "text/html"
 
     private array $PagesQueued = [];
     protected array $Pages;
@@ -61,30 +63,6 @@ class Crawler {
         $this->MaxCurls = $max_async_curls;
     }
 
-    // protected function set_curl(string $url, &$handle) : void {
-
-    //     if(is_resource($handle)){
-    //         curl_setopt($handle, CURLOPT_URL, $url);
-    //         return;
-    //     }
-
-    //     $handle = curl_init();
-
-    //     curl_setopt($handle, CURLOPT_URL, $url);
-        
-    //     curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
-    //     curl_setopt($handle, CURLOPT_FOLLOWLOCATION, true);
-    //     curl_setopt($handle, CURLOPT_FRESH_CONNECT, true);
-    //     curl_setopt($handle, CURLOPT_VERBOSE, false);
-    //     curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, false);
-    //     curl_setopt($handle, CURLOPT_CONNECTTIMEOUT, 4);
-    //     curl_setopt($handle, CURLOPT_TIMEOUT, 4);
-    //     curl_setopt($handle, CURLOPT_MAXREDIRS, 10);
-    //     curl_setopt($handle, CURLOPT_USERAGENT, 'Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/81.0');
-
-    //     curl_multi_add_handle($this->Curl, $handle);
-    // }
-
     protected function init_curl(string ...$urls) : void {
 
         $handles_len = count($this->CurlHandles);
@@ -92,10 +70,14 @@ class Crawler {
         $diff = $this->MaxCurls - $urls_len;
         if($diff > 0){
             for($i = 0; $i < $diff && $i < $handles_len; $i++){
-                if(is_resource($this->CurlHandles[$i]['curl'])){
+                if($this->CurlHandles[$i]['curl'] instanceof CurlHandle){
                     curl_multi_remove_handle($this->Curl, $this->CurlHandles[$i]['curl']);
+                    curl_close($this->CurlHandles[$i]['curl']);
+                    unset($this->CurlHandles[$i]);
                 }
             }
+
+            $this->CurlHandles = array_values($this->CurlHandles);
         } else if($diff < 0){
             $diff *= -1;
             for($i = 0; $i < $diff && $i < $urls_len; $i++){
@@ -112,7 +94,7 @@ class Crawler {
 
         $urls_len = count($urls);
 
-        $max_timeout = 4 * $urls_len;
+        $max_timeout = 4;
         for($i = 0; $i < $this->MaxCurls && $i < $urls_len; $i++){
             $handle_url = $urls[$i];
 
@@ -124,9 +106,9 @@ class Crawler {
 
             $this->CurlHandles[$i]['url'] = $handle_url;
 
-            if(is_resource($this->CurlHandles[$i]['curl'])){
-                curl_setopt($this->CurlHandles[$i]['curl'], CURLOPT_URL, $url);
-                continue;
+            if($this->CurlHandles[$i]['curl'] instanceof CurlHandle){
+                curl_multi_remove_handle($this->Curl, $this->CurlHandles[$i]['curl']);
+                curl_close($this->CurlHandles[$i]['curl']);
             }
     
             $this->CurlHandles[$i]['curl'] = curl_init();
@@ -160,7 +142,7 @@ class Crawler {
         $this->Events[$event][] = $callback;
     }
 
-    protected function trigger_event(int $event, ...$params) : void {
+    protected function trigger_event(int $event, &...$params) : void {
 
         if(!isset($this->Events[$event])){
             return;
@@ -197,13 +179,17 @@ class Crawler {
         $url_info = $this->get_info_from_url($url);
         $this->add_page_to_queue($url_info);
 
+        $i = 0;
         do{
-            $this->crawl_page(...$this->PagesQueued);
+            $i++;
+            echo "#{$i} Crawling\n";
+            $this->crawl_page();
         } while(count($this->PagesQueued) > 0);
 
-        print_r($this->PagesQueued);
+        // print_r($this->PagesQueued);
 
-        $this->trigger_event(self::EVENT_ON_FINISH, time() - $start);
+        $time_elapsed = time() - $start;
+        $this->trigger_event(self::EVENT_ON_FINISH, $time_elapsed);
     }
 
     protected function debug_info(string $current_url) : void {
@@ -214,9 +200,16 @@ class Crawler {
         if($display_memory || $display_crawls){
             $pages_crawled = count($this->Pages);
             $pages_queued = count($this->PagesQueued);
-    
-            $display_text = $display_memory ? "Memory usage: {$this->get_memory_usage()}; " : '';
-            $display_text = $display_crawls ? "{$display_text}Pages crawled: {$pages_crawled}; Pages queued: {$pages_queued} -> Current crawl: {$current_url}\n" : "{$display_text}\n";
+
+            $display_text = $display_memory ? "({$this->get_memory_usage()} - {$this->get_memory_usage(true)} RAM) " : '';
+            $display_text = $display_crawls ? "{$display_text}{$pages_crawled} crawled; {$pages_queued} queued -> Crawling: {$current_url}\n" : "{$display_text}\n";
+
+            $vars = get_defined_vars();
+            $funcs = get_defined_functions();
+            $consts = get_defined_constants();
+            $this->trigger_event(self::EVENT_ON_DEBUG, $vars, $funcs, $consts);
+
+            unset($vars, $funcs, $consts);
 
             echo $display_text;
 
@@ -231,20 +224,22 @@ class Crawler {
     protected function remove_page_from_queue(string $built_url) : void {
 
         $queue_index = array_search($built_url, $this->PagesQueued);
-        if($queue_index !== false){
+
+        if($queue_index !== false && $this->PagesQueued[$queue_index] == $built_url){
             unset($this->PagesQueued[$queue_index]);
-            $this->PagesQueued = array_values($this->PagesQueued);
         }
+
+        $this->PagesQueued = array_values($this->PagesQueued);
     }
 
     protected function add_page_to_queue(Url $url) : void {
         
         $built_url = $url->buildUrl();
+
         $in_queue = in_array($built_url, $this->PagesQueued);
         $in_pages = in_array($built_url, $this->Pages);
 
-        if($in_queue && $in_pages){
-            $this->remove_page_from_queue($built_url);
+        if($in_queue || $in_pages){
             return;
         }
 
@@ -266,28 +261,19 @@ class Crawler {
         return true;
     }
 
-    protected function crawl_page(string ...$urls) : void {
+    protected function crawl_page() : void {
 
-        $urls_len = count($urls);
-        $diff = $this->MaxCurls - $urls_len;
+        $urls = [];
         $pages_queued_count = count($this->PagesQueued);
-        if($diff > 0){
-            for($i = 0; $i < $diff && $i < $pages_queued_count && $i < $this->MaxCurls; $i++){
-                $urls[] = $this->PagesQueued[$i];
-                unset($this->PagesQueued[$i]);
-            }
+        for($i = 0; $i < $this->MaxCurls && $i < $pages_queued_count; $i++){
+            $url_to_add = $this->PagesQueued[$i];
+            $urls[] = $url_to_add;
 
-            $this->PagesQueued = array_values($this->PagesQueued);
-        } else if($diff < 0){
-            $diff *= -1;
-            for($i = 0; $i < $diff && $i < $urls_len && $i < $this->MaxCurls; $i++){
-                $url_info = $this->get_info_from_url($urls[$i]);
-                $this->add_page_to_queue($url_info);
-                unset($urls[$i]);
-            }
-
-            $urls = array_values($urls);
+            $this->remove_page_from_queue($url_to_add);
+            $pages_queued_count = count($this->PagesQueued);
         }
+
+        unset($pages_queued_count);
 
         $valid_urls = [];
         foreach($urls as $url_to_validade){
@@ -305,15 +291,10 @@ class Crawler {
 
         $this->get_url_remote_information(...$valid_urls);
 
-        $queue_len = count($this->PagesQueued);
-        $next_urls = [];
-        for($i = 0; $i < $this->MaxCurls && $i < $queue_len; $i++){
-            $next_urls[] = $this->PagesQueued[$i];
-            unset($this->PagesQueued[$i]);
-        }
-        $this->PagesQueued = array_values($this->PagesQueued);
-        
-        $this->crawl_page(...$next_urls);
+        unset($urls);
+        unset($valid_urls);
+        unset($url_to_validade);
+        unset($__info);
     }
 
     protected function get_canonical_url(string &$url) : string {
@@ -409,7 +390,7 @@ class Crawler {
             $url_to_add = $preserve_host ? $url_info->buildUrl($page_to_add) : $link_info->buildUrl($page_to_add);
 
             if(!in_array($url_to_add, $output)){
-                $output[] = $link_info;
+                $output[] = $url_to_add;
             }
         }
     }
@@ -425,9 +406,10 @@ class Crawler {
                 curl_multi_select($this->Curl);
             }
         } while($active === null || $active > 0 || $this->Curl == CURLM_CALL_MULTI_PERFORM);
+        unset($active);
 
         for($i = 0; $i < count($this->CurlHandles); $i++){
-            $handle = &$this->CurlHandles[$i];
+            $handle = $this->CurlHandles[$i];
 
             $url_info = $this->get_info_from_url($handle['url']);
             $built_url = $url_info->buildUrl();
@@ -440,16 +422,18 @@ class Crawler {
             if(!$content){
                 unset($content);
                 $this->trigger_event(self::EVENT_ON_MISSING_HTML, $url_info, $info);
+                unset($info);
                 continue;
             }
     
             if(!preg_match('/text\/html/i', $info['content_type'])){
                 unset($content);
                 $this->trigger_event(self::EVENT_ON_MISMATCH_CONTENT, $url_info, $info);
+                unset($info);
                 continue;
             }
 
-            @$this->DOM->loadHTML($content, LIBXML_COMPACT | LIBXML_BIGLINES | LIBXML_NOERROR | LIBXML_PARSEHUGE | LIBXML_NSCLEAN | LIBXML_NOBLANKS);
+            @$this->DOM->loadHTML($content);
             unset($content);
     
             $robots = $this->get_robots();
@@ -460,22 +444,35 @@ class Crawler {
 
             $this->trigger_event(self::EVENT_ON_CRAWL, $url_info, $robots, $canonical, $info);
 
-            $page_links = [];
-            if($robots['follow']){
-                $this->get_links($url_info, $page_links);
+            unset($info);
+            unset($canonical);
 
-                foreach($page_links as $link_info){
-                    $this->trigger_event(self::EVENT_ON_LINK_FOUND, $url_info, $link_info);
-        
-                    $built_url = $link_info->buildUrl();
-                    if(!$built_url){
-                        continue;
-                    }
-    
-                    $this->add_page_to_queue($link_info);
-                }
+            if(!$robots['follow']){
+                unset($robots);
+                continue;
             }
+
+            unset($robots);
+
+            $page_links = [];
+            $this->get_links($url_info, $page_links);
+
+            foreach($page_links as $link){
+                $link_info = $this->get_info_from_url($link);
+
+                $this->trigger_event(self::EVENT_ON_LINK_FOUND, $url_info, $link_info);
+    
+                $built_url = $link_info->buildUrl();
+                if(!$built_url){
+                    continue;
+                }
+
+                $this->add_page_to_queue($link_info);
+            }
+
+            unset($page_links);
         }
+        unset($urls);
     }
 
     protected function get_memory_usage(bool $real_usage = false) : string {
@@ -483,5 +480,13 @@ class Crawler {
         $unit = ['b', 'kb', 'mb', 'gb', 'tb', 'pb'];
         $i = floor(log($size, 1024));
         return @round($size / pow(1024, $i), 2)."{$unit[$i]}";
+    }
+
+    public function __get(string $attr) {
+
+        if(isset($this->$attr)){
+            return $this->$attr;
+        }
+        return null;
     }
 }
